@@ -4,6 +4,7 @@ def generate_stats(df: pd.DataFrame, column_types: dict) -> dict:
     """
     Accepts a DataFrame and a dictionary of column type classifications.
     Computes summary metrics for numeric and categorical columns.
+    Explicitly detects and reports multi-way ties for most frequent values.
     """
     stats_summary = {
         "numeric": {},
@@ -23,15 +24,29 @@ def generate_stats(df: pd.DataFrame, column_types: dict) -> dict:
                 "max": float(df[col_name].max())
             }
             
-        # 2. Process Categorical Columns
+        # 2. Process Categorical Columns (With Robust Tie-Handling)
         elif col_role == "categorical":
             value_counts_dict = df[col_name].value_counts().to_dict()
+            
+            # mode() finds all values that tie for the highest frequency count
             mode_series = df[col_name].mode().dropna()
-            most_frequent = mode_series.iloc[0] if not mode_series.empty else "N/A"
+            
+            if mode_series.empty:
+                most_frequent = "N/A"
+                is_tie = False
+            elif len(mode_series) > 1:
+                # Option 1: Convert all tied items into a clean Python list
+                most_frequent = mode_series.tolist()
+                is_tie = True
+            else:
+                # Single clear winner: extract the string directly
+                most_frequent = mode_series.iloc[0]
+                is_tie = False
             
             stats_summary["categorical"][col_name] = {
                 "value_counts": value_counts_dict,
-                "most_frequent": most_frequent
+                "most_frequent": most_frequent,
+                "is_tie": is_tie
             }
             
     return stats_summary
@@ -44,32 +59,23 @@ def generate_date_stats(df: pd.DataFrame, column_types: dict) -> dict:
     """
     date_summary = {}
     
-    # Track down if any column is explicitly classified as a date
     date_cols = [name for name, role in column_types.items() if role == "date" and name in df.columns]
     
-    # Edge case: If no date column is discovered, return a clear structured message safely
     if not date_cols:
         return {"status": "No date columns found", "trends": {}}
         
     for col_name in date_cols:
-        # Create a clean, temporary Series explicitly converted to Datetime objects
         temp_date_series = pd.to_datetime(df[col_name], format='ISO8601')
         
-        # Calculate boundaries and convert them to standard readable strings
         earliest_date = temp_date_series.min().strftime('%Y-%m-%d')
         latest_date = temp_date_series.max().strftime('%Y-%m-%d')
         
-        # Trend Analysis: Group total Numeric values by month intervals
-        # First, bind the clean dates temporarily back into our context calculation
         monthly_trends = {}
         numeric_cols = [name for name, role in column_types.items() if role == "numeric" and name in df.columns]
         
         if numeric_cols:
-            # .dt.to_period('M') maps timestamps directly to their calendar month string (e.g. '2026-01')
             month_periods = temp_date_series.dt.to_period('M')
-            
             for num_col in numeric_cols:
-                # Sum values by month groupings and format the index keys back to clean strings
                 grouped = df.groupby(month_periods)[num_col].sum()
                 monthly_trends[num_col] = {str(period): float(val) for period, val in grouped.items()}
         
